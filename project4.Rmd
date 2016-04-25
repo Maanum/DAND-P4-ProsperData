@@ -1,17 +1,22 @@
 "P4 Project: Loan Data from Prosper" by Kristofer Maanum
 ========================================================
 
+```{r global_options, include=FALSE} 
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, messages=FALSE)
+```
+
 ```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
 library(ggplot2)
 library(dplyr)
 library(memisc)
-library(GGally)
 library(gridExtra)
 library(tidyr)
+library(psych)
 ```
 
 ```{r echo=FALSE, Load_the_Data}
 # Load Data
+
 setwd('D:/Users/Kristofer/Desktop/Data/P4/Project')
 loan <- read.csv('prosperLoanData.csv', na.strings = c('', ' ', 'NA'))
 
@@ -127,7 +132,7 @@ In November 2008 the SEC found Prosper to be in violation of the Securities Act 
 
 ```{r echo=FALSE}
 ggplot(aes(x = ListingCreationDate), data = loan) +
-  geom_histogram(aes(fill = ProsperRating..Alpha.), binwidth = 90) +
+  geom_histogram(binwidth = 90) +
   scale_x_date(date_breaks = "1 year", date_minor_breaks = "3 months",
                date_labels = "%Y", 
                limits = as.Date(c('2006-01-01','2015-01-01')))
@@ -137,14 +142,25 @@ As I'd expect, there is a clear gap in data during that timeframe, and the data 
 
 ```{r echo=FALSE}
 summary(loan$ProsperScore)
-by(loan$ListingCreationDate, loan$ProsperScore, summary)
 
 qplot(x=ProsperScore, data=loan, binwidth = 1) +
   scale_x_continuous(breaks = seq(0,11,1))
-
 ```
 
-Prosper Score ranges from 1 to 11.  It's clear that there are a lot of NA values.  Upon review, it's apparent that the NA values are for loans created prior to the break in activity.
+Prosper Score ranges from 1 to 11.  It's clear that there are a lot of NA values.  
+
+_Loans with NO Prosper Score:_
+```{r}
+summary(subset(loan, is.na(loan$ProsperScore))$ListingCreationDate)
+```
+
+_Loans WITH a Prosper Score:_
+
+```{r}
+summary(subset(loan, !is.na(loan$ProsperScore))$ListingCreationDate)
+```
+
+Upon review, it's apparent that the NA values are for loans created prior to the break in activity.
 
 ***
 #### Actual Annual Return
@@ -236,12 +252,14 @@ I'd like to take a closer look at how Prosper Score is calculated.  [According t
 I'll try to find analogous data in the dataset, then look for correlations and trends.
 
 ```{r echo=FALSE}
-PSIndicators <- c('ProsperScore',
+PSIndicators1 <- c('ProsperScore',
                 'InquiriesLast6Months',
                 'TotalInquiries',
                 'CurrentDelinquencies',
                 'DelinquenciesLast7Years',
-                'BankcardUtilization',
+                'BankcardUtilization')
+                
+PSIndicators2 <- c('ProsperScore',
                 'TradesOpenedLast6Months',
                 'DebtToIncomeRatio',
                 'OnTimeProsperPayments',
@@ -255,12 +273,11 @@ loanNew$DebtToIncomeRatio[is.na(loanNew$DebtToIncomeRatio)] <- 0
 loanNew$ProsperPaymentsLessThanOneMonthLate[is.na(loanNew$ProsperPaymentsLessThanOneMonthLate)] <- 0
 loanNew$ProsperPaymentsOneMonthPlusLate[is.na(loanNew$ProsperPaymentsOneMonthPlusLate)] <- 0
 
-cor(loanNew[PSIndicators])
-
 set.seed(10)
 loanNewSample <- sample_n(loanNew, 5000)
-ggpairs(loanNewSample[PSIndicators])
 
+pairs.panels(loanNewSample[PSIndicators1], pch=".")
+pairs.panels(loanNewSample[PSIndicators2], pch=".")
 ```
 
 
@@ -555,7 +572,7 @@ So the models might indicate if the grade will be on the lower or higher end, bu
 
 ### Plot One
 ```{r echo=FALSE, Plot_One}
-p <- ggplot(aes(x = LoanOriginationQuarter, fill = ProsperRating..Alpha.), data = loanNew) +
+ p <- ggplot(aes(x = LoanOriginationQuarter, fill = ProsperRating..Alpha.), data = loanNew) +
   geom_bar() +
   ylab("Number of Loans") +
   xlab("Calendar Quarter") +
@@ -565,12 +582,14 @@ p <- ggplot(aes(x = LoanOriginationQuarter, fill = ProsperRating..Alpha.), data 
 p1 <- p + 
   theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position=c(.1, .6))
 
-
-p2 <- p + facet_grid(ProsperRating..Alpha. ~ .) +
+# "P2" is another view with each Propser Rating faceted out
+# "P2" is intentionally not outputted to the knit html
+p2 <- p + 
+  facet_grid(ProsperRating..Alpha. ~ .) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="none")
 
 p1
-p2
+
 ```
 
 ### Description One
@@ -584,14 +603,16 @@ set.seed(15)
 loanNewSample <- sample_n(loanNew, 2500)
 loanNewSample$LoanOriginationYear <- format(loanNewSample$LoanOriginationDate, '%Y')
 
-ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), data = loanNewSample) +
+p3 <- ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), data = loanNewSample) +
   geom_point(aes(color = LoanOriginationYear), alpha = .5, position = position_jitter()) +
   ylab("Interest Rate") +
   xlab("Prosper Rating") +
   guides(color=guide_legend(title="Origination\nYear")) +
   ggtitle('Interest Rate by Prosper Rating, Year')
 
-ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), 
+# "P4" is a focus on just the "C" rated loans to show detail on Term and Origination Year
+# "P4" is intentionally not outputted to the knit html
+p4 <- ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), 
        data = subset(loanNewSample, loanNewSample$ProsperRating..Alpha. =="C")) +
   geom_point(aes(color = LoanOriginationYear, shape = TermIndex),
              alpha = .75, position = position_jitter(), size = 3) +
@@ -600,10 +621,13 @@ ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate),
   guides(color = guide_legend(title="Origination\nYear"),
          shape = guide_legend(title="Loan Term\n(Years)")) +
   ggtitle('Interest Rate Detail for "C" Prosper Rating (by Year, Term)')
+
+p3
+
 ```
 
 ### Description Two
-The interest rate for a given loan is largely determined by the Prosper Rating for that loan.  However, there is some variance within a Prosper Rating based on various factors.  Economic conditions and loan market at the time of loan origination will affect the rate.  Additionally, the term of the loan can affect the rate: the longer the term the higher the rate.
+The interest rate for a given loan is largely determined by the Prosper Rating for that loan.  However, there is some variance within a Prosper Rating based on various factors.  Economic conditions and loan market at the time of loan origination will affect the rate.
 
 ### Plot Three
 ```{r echo=FALSE, Plot_Three}
@@ -613,7 +637,7 @@ loanNewTerm36Complete <- subset(loanNewTerm36,
 
 loanNewTerm36Complete$LenderAnnualReturn[is.na(loanNewTerm36Complete$LenderAnnualReturn)] <- 0
 
-qplot(x = LenderAnnualReturn, data = loanNewTerm36Complete, color = ProsperRating..Alpha., 
+p5 <- qplot(x = LenderAnnualReturn, data = loanNewTerm36Complete, color = ProsperRating..Alpha., 
       geom = 'density') +
   xlim(0,.5) +
   ylab("Density") +
@@ -622,13 +646,17 @@ qplot(x = LenderAnnualReturn, data = loanNewTerm36Complete, color = ProsperRatin
   ggtitle('Density of Lender Returns on Investment by Prosper Rating (0.0 to 0.50).\n
           Sample of Loans with term of 36 months originating from Apr. 2009 through Feb. 2011')
 
-ggplot(aes(x = ProsperRating..Alpha., fill = statusGroup), data = loanNewTerm36Complete) +
+# "P6" shows the risk involved in each loan rating group as natural counterpoint to returns (P5)
+# "P6" is intentionally not outputted to the knit html
+p6 <- ggplot(aes(x = ProsperRating..Alpha., fill = statusGroup), data = loanNewTerm36Complete) +
   geom_bar(stat='count', position = "fill") +
   ylab("Proportion of Loan Final Status") +
   xlab("Prosper Rating") +
   guides(fill = guide_legend(title="Loan\nStatus")) +
   ggtitle('Proportion of Loans Successfully Paid Off vs. Defaulted, by Prosper Rating.\n
           Sample of Loans with term of 36 months originating from Apr. 2009 through Feb. 2011')
+
+p5
 ```
 
 ### Description Three
