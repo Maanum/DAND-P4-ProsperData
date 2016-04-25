@@ -1,0 +1,653 @@
+"P4 Project: Loan Data from Prosper" by Kristofer Maanum
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+library(ggplot2)
+library(dplyr)
+library(memisc)
+library(GGally)
+library(gridExtra)
+library(tidyr)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Load Data
+setwd('D:/Users/Kristofer/Desktop/Data/P4/Project')
+loan <- read.csv('prosperLoanData.csv', na.strings = c('', ' ', 'NA'))
+
+# Update keys and incorrect factors to character
+loan$ListingKey <- as.character(loan$ListingKey)
+loan$MemberKey <- as.character(loan$MemberKey)
+loan$GroupKey <- as.character(loan$GroupKey)
+loan$LoanKey <- as.character(loan$LoanKey)
+loan$BorrowerState <- as.character(loan$BorrowerState)
+loan$Occupation <- as.character(loan$Occupation)
+
+# Set date type properly
+loan$ListingCreationDate <- as.Date(loan$ListingCreationDate)
+loan$ClosedDate <- as.Date(loan$ClosedDate)
+loan$DateCreditPulled <- as.Date(loan$DateCreditPulled)
+loan$LoanOriginationDate <- as.Date(loan$LoanOriginationDate)
+loan$FirstRecordedCreditLine <- as.Date(loan$FirstRecordedCreditLine)
+
+# Set logical type properly
+loan$CurrentlyInGroup <- as.logical(loan$CurrentlyInGroup)
+loan$IsBorrowerHomeowner <- as.logical(loan$IsBorrowerHomeowner)
+loan$IncomeVerifiable <- as.logical(loan$IncomeVerifiable)
+
+# Correct Factor Orders
+old.order <- levels(loan$ProsperRating..Alpha.)
+new.order <- c(old.order[2], old.order[1], old.order[3:7])
+loan$ProsperRating..Alpha. <- factor(loan$ProsperRating..Alpha., levels = new.order, ordered = T)
+
+old.order <- levels(loan$IncomeRange)
+new.order <- c(old.order[1:2], old.order[4:6], old.order[3], old.order[8], old.order[7])
+loan$IncomeRange <- factor(loan$IncomeRange, levels = new.order, ordered = T)
+
+q.order <- c('Q4 2005', 'Q1 2006', 'Q2 2006', 'Q3 2006', 'Q4 2006', 'Q1 2007', 'Q2 2007',
+               'Q3 2007', 'Q4 2007', 'Q1 2008', 'Q2 2008', 'Q3 2008', 'Q4 2008', 'Q2 2009',
+               'Q3 2009', 'Q4 2009', 'Q1 2010', 'Q2 2010', 'Q3 2010', 'Q4 2010', 'Q1 2011',
+               'Q2 2011', 'Q3 2011', 'Q4 2011', 'Q1 2012', 'Q2 2012', 'Q3 2012', 'Q4 2012',
+               'Q1 2013', 'Q2 2013', 'Q3 2013', 'Q4 2013', 'Q1 2014')
+loan$LoanOriginationQuarter <- factor(loan$LoanOriginationQuarter, levels = q.order, ordered = T)
+
+# New Variable- Loan Term Index
+loan$TermIndex <- as.character(loan$Term)
+
+# New Variable- Loan Status Buckets
+loan$statusGroup <- substr(loan$LoanStatus, 1, 8)
+loan$statusGroup <- factor(loan$statusGroup)
+levels(loan$statusGroup) <- list(
+  'Defaulted' = c("Defaulte", "Chargedo"),  
+  'Completed' = c("Complete"),  
+  'Current' = c("Current","FinalPay"),
+  'Past Due' = c('Past Due'))
+loan$statusGroup <- factor(loan$statusGroup, levels = c('Defaulted', 'Completed', 'Current', 'Past Due'), ordered = T)
+
+```
+
+# Univariate Plots Section
+I start with some basic exploration of the data.  I've reviewed the Prosper website and taken a quick look at the CSV in Notepad++ and Excel.  In R, I'll confirm the variable names and factor levels. 
+
+```{r echo=FALSE}
+names(loan)
+summary(loan[,c(5,8:13,64)])
+levels(loan$LoanStatus)
+levels(loan$CreditGrade)
+levels(loan$EmploymentStatus)
+levels(loan$ProsperRating..Alpha.)
+```
+
+***
+#### Prosper Rating and Score
+
+Prosper Rating "Alpha" and "Numeric" variables seem to be different representations of the same data.  I want to do a quick check to confirm.  Also, a "Prosper Score" is present.  I want to see if there are any observations with a Score but not a Rating or vice versa.
+```{r echo=FALSE}
+head(loan[,c("ProsperRating..Alpha.", "ProsperRating..numeric.")],10)
+
+# Check Prosper Score when Rating is NA (and vice versa)
+summary(loan[is.na(loan$ProsperRating..Alpha.),]$ProsperScore)
+summary(loan[is.na(loan$ProsperScore),]$ProsperRating..Alpha.)
+```
+
+It looks like Prosper Score and Rating have values for the same observations.
+
+```{r echo=FALSE}
+table(loan$ProsperRating..Alpha.)
+ggplot(aes(x = ProsperRating..Alpha.), data = loan) +
+  geom_bar(stat="count")
+summary(subset(loan,is.na(loan$ProsperRating..Alpha.))$ListingCreationDate)
+```
+Prosper ratings appear to be normally distributed with the most at "C".  The "NA"-rated loans are from the loans before the changes in 2009.
+
+***
+#### Loan Amounts
+
+I then review loan amounts.
+
+```{r echo=FALSE}
+summary(loan$LoanOriginalAmount)
+ggplot(aes(x = LoanOriginalAmount), data = loan) +
+  geom_histogram()
+```
+
+Loan values seem to have spikes at certain intervals.  These appear to be at every 5000 USD.  I'll set the binwidths to this value.
+
+```{r echo=FALSE}
+ggplot(aes(x = LoanOriginalAmount), data = loan) +
+  geom_histogram(binwidth=5000)
+```
+
+With this binwidth it looks like the loan amount is normally distributed with a peak of 5000 USD and with a long right tail, going up to around 35000 USD.
+
+***
+#### Loan Activity Hiatus
+
+In November 2008 the SEC found Prosper to be in violation of the Securities Act of 1933 and imposed a cease and desist order on Prosper.  In July 2009, Prosper reopened their website for lending and borrowing with a few changes.  I wanted to see that played out in the data.
+
+```{r echo=FALSE}
+ggplot(aes(x = ListingCreationDate), data = loan) +
+  geom_histogram(aes(fill = ProsperRating..Alpha.), binwidth = 90) +
+  scale_x_date(date_breaks = "1 year", date_minor_breaks = "3 months",
+               date_labels = "%Y", 
+               limits = as.Date(c('2006-01-01','2015-01-01')))
+```
+
+As I'd expect, there is a clear gap in data during that timeframe, and the data available seems to be different in the two time ranges.  I'll likely focus most of my review on the second set of observations.
+
+```{r echo=FALSE}
+summary(loan$ProsperScore)
+by(loan$ListingCreationDate, loan$ProsperScore, summary)
+
+qplot(x=ProsperScore, data=loan, binwidth = 1) +
+  scale_x_continuous(breaks = seq(0,11,1))
+
+```
+
+Prosper Score ranges from 1 to 11.  It's clear that there are a lot of NA values.  Upon review, it's apparent that the NA values are for loans created prior to the break in activity.
+
+***
+#### Actual Annual Return
+
+The data includes information on expected lender yield and some variables of the total payments.  However, there is no final yield information.  I'll calculate the annual return for each loan using the following formula:
+
+$Annual Return = ((P + G) / P) ^ {(1 / y)} - 1$  
++ G = Gain  
++ P = Principal  
++ y = Life of loan in years  
+
+```{r echo=FALSE}
+# There is no variable for life of the loan.  I'll create the "LifeInMonths" for this.  Notes:
+#  1. difftime's greatest unit is days, so well put it in days then convert to months.
+#  2. Some loans are just over the loan term when viewed by days.  However, I want this to reflect the actual term (e.g. a loan with a term of 36 months should show a loan life of 36, even if paid off in 36 months and 2 days)
+#  3. Further the above, all loans should have some loan life, so even if it's paid off in 15 days it should show as life of 1 month.  This plays a role in our calculation.
+
+loan$LifeInMonths <- floor((as.numeric(difftime(as.Date(loan$ClosedDate), as.Date(loan$LoanOriginationDate),
+                    unit="days")) / 365) * 12)
+loan$LifeInMonths[loan$LifeInMonths == 0] <- 1
+
+# Standard calculation for annual return rate.
+loan$LenderFinalValue <- loan$LP_CustomerPayments + loan$LP_ServiceFees + loan$LP_CollectionFees
+loan$LenderAnnualReturn <- ((loan$LenderFinalValue / loan$LoanOriginalAmount) ^ (1 / (loan$LifeInMonths / 12))) - 1
+
+qplot(x = LenderAnnualReturn, data = subset(loan, loan$statusGroup %in% c('Completed', 'Default')),
+      geom = 'density') +
+  xlim(-.2,1)
+```
+
+Actual lender returns for loans that have actually completed (including defaulted loans) are normally distributed with a peak around .6.  There is a long right tail though some loans do have a negative return.
+
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+There are 113,937 loans in the dataset with 82 different variables on each loan.  There are two main groups of observations: loans before the Prosper changes in 2009 and loans after the 2009 changes.  Each set of observations has different data (e.g. pre-2009 observations do not have Prosper Ratings).
+
+Main aspects of the loan represented by the data are:
+1. Basic aspects of the loan (interest rate, term, principal)
+2. Current loan status (age, principal paid down),  The variables cut, color, and clarity, are ordered factor variables with the following levels.
+3. Borrower/loan risk indicators (borrower monthly income, credit rating, debt-to-income ratio)
+
+
+Most loans are of Prosper Rating "C" and around 5000-8000 USD.  The median loan amount is 6500 USD.
+From best to worst, the Prosper Ratings are AA, A, B, C, D, E, and HR ("high risk").
+
+### What is/are the main feature(s) of interest in your dataset?
+Prosper rating is of key interest as this is an existing index of risk created by Prosper.  Interest rates are set around this value.  Investors have a trade-off between risk and return that pivots around this value.  As this is important to investors, I'd like to look at what goes into the Prosper Ratings and Prosper Scores.
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+Loan current status will need to be accounted for.  Total amount earned on each loan will play a role.
+
+### Did you create any new variables from existing variables in the dataset?
+Yes, the key new variables I created were to track investment performance.  These include variables to represent the life of the loan in months and the annual rate of return for the loan.  Also, I created a "Term Index" field to factor terms into the three buckets of 12, 36 and 60 month loans.  Finally, I created a variable to represent the actual yield of each loan.
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+Many operations were needed to clean up the data after loading.  The dates were put into date format, and certain categorical variables needed to be un-factored.  Prosper Rating was put into the wrong order ('A' before 'AA') so that had to be corrected.
+
+
+# Bivariate Plots Section
+
+First, I want to focus on the second set of observations (starting after Prosper began facilitating loans again).  These include new data such as Prosper Rating and operate under some different rules than before the Prosper lawsuit.
+
+```{r echo=FALSE}
+# Prosper started tracking Prosper Rating when it re-opened, so we'll just use this to filter out old loans.
+loanNew <- subset(loan, !is.na(loan$ProsperRating..Alpha.))
+summary(loanNew$ListingCreationDate)
+
+ggplot(aes(x = ListingCreationDate), data = loanNew) +
+  geom_histogram(aes(fill = ProsperRating..Alpha.), binwidth = 90) +
+  scale_x_date(date_breaks = "1 year", date_minor_breaks = "3 months",
+               date_labels = "%Y")
+
+```
+
+***
+#### Prosper Score
+I'd like to take a closer look at how Prosper Score is calculated.  [According to Prosper](https://www.prosper.com/help/topics/general-prosper_score), key variables for the Prosper Score are as follows:
+
++ Number of inquiries on the credit bureau
++ Number of delinquent accounts on the credit bureau
++ Credit card utilization on the credit bureau
++ Number of recently opened trades on the credit bureau
++ Debt to income ratio
++ Loan payment performance on prior Prosper loans
+
+
+I'll try to find analogous data in the dataset, then look for correlations and trends.
+
+```{r echo=FALSE}
+PSIndicators <- c('ProsperScore',
+                'InquiriesLast6Months',
+                'TotalInquiries',
+                'CurrentDelinquencies',
+                'DelinquenciesLast7Years',
+                'BankcardUtilization',
+                'TradesOpenedLast6Months',
+                'DebtToIncomeRatio',
+                'OnTimeProsperPayments',
+                'ProsperPaymentsLessThanOneMonthLate',
+                'ProsperPaymentsOneMonthPlusLate')
+
+
+# Change NA values to 0 to allow cor to calculate properly.
+loanNew$OnTimeProsperPayments[is.na(loanNew$OnTimeProsperPayments)] <- 0
+loanNew$DebtToIncomeRatio[is.na(loanNew$DebtToIncomeRatio)] <- 0
+loanNew$ProsperPaymentsLessThanOneMonthLate[is.na(loanNew$ProsperPaymentsLessThanOneMonthLate)] <- 0
+loanNew$ProsperPaymentsOneMonthPlusLate[is.na(loanNew$ProsperPaymentsOneMonthPlusLate)] <- 0
+
+cor(loanNew[PSIndicators])
+
+set.seed(10)
+loanNewSample <- sample_n(loanNew, 5000)
+ggpairs(loanNewSample[PSIndicators])
+
+```
+
+
+Some of these plots seem to indicate relationships, but it's difficult to see on the plot matrix.  Plotting a bit closer makes the trends more apparent.
+```{r echo=FALSE}
+ggplot(aes(x = InquiriesLast6Months, y = ProsperScore), data = loanNewSample) +
+  geom_point(position = position_jitter(), alpha = .2)
+
+ggplot(aes(x = BankcardUtilization, y = ProsperScore), data = loanNewSample) +
+  geom_point(position = position_jitter(), alpha = .5)
+
+```
+
+There are a lot of zeros on bank card utilization that don't appear to be normal for the trend. I'll remove these and add a linear model.
+
+```{r echo=FALSE}
+ggplot(aes(x = BankcardUtilization, y = ProsperScore), 
+       data = subset(loanNewSample, loanNewSample$BankcardUtilization != 0)) +
+  geom_point(position = position_jitter(), alpha = .5) +
+  stat_smooth(method = "lm", col = "red")
+```
+
+The bank card utilization trend is a bit clearer there.
+
+***
+
+```{r echo=FALSE}
+ggplot(aes(x = TradesOpenedLast6Months, y = ProsperScore), data = loanNewSample) +
+  geom_point() +
+  stat_smooth(method = "lm", col = "red")
+```
+
+Number of trades recently opened and Prosper Score both a low integer variables, so this looks more like graph paper though the trend does show up.  I'll add jitter and reduce the alpha.
+
+```{r echo=FALSE}
+ggplot(aes(x = TradesOpenedLast6Months, y = ProsperScore), data = loanNewSample) +
+  geom_point(position = position_jitter(), alpha = .5) +
+  stat_smooth(method = "lm", col = "red") +
+  ylim(1,11) +
+  xlim(0,quantile(loanNewSample$TradesOpenedLast6Months,0.99))
+
+```
+
+That makes it a bit more simple to see.
+<br>
+
+We have identified some of the factors that go into the Prosper Score, though it's likely that Prosper's algorithm slices the data in different ways and uses different data.  The data reviewed do seem to account for some but not all of the Prosper Score.
+
+
+***
+#### Prosper Rating
+
+I'll look at Prosper Rating now in a manner similar to how Prosper Score was reviewed.  [Some internet searching](https://en.wikipedia.org/wiki/Prosper_Marketplace#Prosper_Ratings) indicates that Prosper Ratings are based off of traditional credit score and the Prosper Score.
+
+```{r echo=FALSE}
+PRIndicators <- c('ProsperRating..numeric.',
+                'ProsperScore',
+                'CreditScoreRangeLower',
+                'CreditScoreRangeUpper')
+
+cor(loanNew[PRIndicators])
+
+```
+
+Prosper Score and credit score seem to explain Prosper Rating better than our exploration of Prosper Score.
+
+```{r echo=FALSE}
+# Need to change Prosper Score to a factor so we get groups of colors rather than gradient.
+loanNew$ProsperScoreFactor <- factor(loanNew$ProsperScore, ordered = T)
+
+ggplot(aes(x=ProsperRating..numeric.), data = loanNew) +
+  geom_histogram(aes(fill = ProsperScoreFactor), binwidth = 1) +
+  scale_x_continuous(breaks = seq(1,7,1))
+```
+
+It's a bit difficult to tell the relationship between Prosper Rating and Prosper Score.
+
+```{r echo=FALSE}
+prosperMatrix <- count(loanNew, ProsperScore, ProsperRating..numeric.)
+
+ggplot(aes(x=ProsperRating..numeric., y=ProsperScore, fill = n), data = prosperMatrix) +
+    geom_tile() +
+  scale_x_continuous(breaks = seq(1,7,1)) +
+  scale_y_continuous(breaks = seq(1,11,1))
+```
+
+This heatmap suggests the linear relationship that we'd expect.
+
+```{r echo=FALSE}
+ggplot(aes(x = ProsperRating..numeric., y = CreditScoreRangeLower), data = loanNewSample) +
+  geom_point(alpha = .2, position = position_jitter())
+```
+
+As credit score increases the Prosper Rating increases as we'd expect as well.
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+Most of the relationships examined are confirmations of documented Prosper standards.  Prosper uses certain metrics about a borrower to create that borrower's "Prosper Score".  Each loan has a "Prosper Rating" which is created from the borrowers Prosper Score and credit score as reported by the traditional credit reporting agencies.  Prosper Rating largely determines a loan's interest rate.
+
+There is a very strong correlation that as Prosper Rating decreases (i.e. the loan is a higher risk) the loan interest rate increases.  The Prosper Rating is strongly correlated with Prosper Score as indicated, and a little less strongly correlated to a borrowers traditional credit score.
+
+Regarding the Prosper Score, we have information on what data Prosper uses to create these scores thugh we don't have a detailed algorithm (e.g. "Number of recently opened trades on the credit bureau" is used, but how recent?).  The Score was not very strongly correlated to a single variable, but had significant correlations to a few variables, the following having about equal correlation:
+
++ TotalInquiries
++ InquiriesLast6Months
++ BankcardUtilization
++ TradesOpenedLast6Months
+
+The next tier of significance included:
++ CurrentDelinquencies
++ DelinquenciesLast7Years 
++ DebtToIncomeRatio
++ StatedMonthlyIncome
++ OnTimeProsperPayments
+
+Some of these data are likely directly linked so for further analysis we can strip out duplicates (e.g. "InquiriesLast6Months" is likely a subset of "TotalInquiries" and has a higher correlation; we can likely disregard "TotalInquiries" in future review.)
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+Yes, "Stated Monthly Income" had a higher correlation to Prosper Score than "OnTimeProsperPayments" even though income is NOT one of the stated factors used to develop this score.  This is unexpected but not surprising.  It is likely that borrowers with higher income will generally have better credit scores, payment performance, etc...  This effect is probably present in a lot of these variables.
+
+### What was the strongest relationship you found?
+
+The strongest relationship was between Prosper Rating and loan interest rate.  This is not surprising as the loan rate is largely based off the Prosper Rating by design.  However, interest rates are not directly set by the Prosper Rating, so it might be interesting to see what else is at play here.
+
+
+
+# Multivariate Plots Section
+
+***
+#### Loan Interest Rate
+
+Although the interest rate is mainly set by the Prosper Rating, there are other factors in play.  I'd like to take a closer look at that to see if we can find what influences the rate.
+
+```{r echo=FALSE}
+loanNewSample <- sample_n(loanNew, 5000)
+
+ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), data = loanNewSample) +
+  geom_point(aes(color = ProsperScoreFactor), alpha = .5, position = position_jitter())
+
+ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), data = loanNewSample) +
+  geom_point(aes(color = LoanOriginalAmount), alpha = .5, position = position_jitter())
+
+ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), data = loanNewSample) +
+  geom_point(aes(color = TermIndex), alpha = .5, position = position_jitter())
+```
+
+Of these, only loan term appears to have some slight influence.  I'll look closer at this.
+
+```{r echo=FALSE}
+ggplot(aes(x = Term, y = BorrowerRate), data = loanNew) +
+  geom_point(aes(color=TermIndex), alpha = .1, position = position_jitter()) +
+  stat_smooth(method = "lm") +
+  facet_wrap(~ProsperRating..Alpha.)
+
+ggplot(aes(x = TermIndex, y = BorrowerRate), data = loanNew) +
+  geom_boxplot() +
+  facet_wrap(~ProsperRating..Alpha.)
+```
+
+It looks like loan term does have an effect on loan rate, independent of Prosper Rating.  I'll focus on loans with a term of 36 months and look a little further.  
+
+```{r echo=FALSE}
+loanNewTerm36 <- subset(loanNew, loanNew$Term == 36)
+```
+
+Prosper also indicates that the economic environment affects the rate.  I'll assume the economy strength changes over time (since we don't have a metric in the data for economy strength) and check if the rates change significantly over time.
+
+```{r echo=FALSE}
+timeSpan <- levels(loanNewTerm36$LoanOriginationQuarter)[c(15:21)]
+timeSpan <- factor(timeSpan, levels = timeSpan, ordered = T)
+
+
+ggplot(aes(x = LoanOriginationQuarter, y = BorrowerRate), 
+       data = subset(loanNewTerm36, 
+                     loanNewTerm36$ProsperRating..Alpha. == "C" &
+                     loanNewTerm36$LoanOriginationQuarter %in% timeSpan)) +
+  geom_boxplot()
+
+```
+
+Controlling for Prosper Rating and loan term, it does appear that the rate ranges change over time.  I'd like to look at this for all Prosper Ratings to confirm, and to compare to an actual economic metric.  I'll use GDP as a quick indicator of economic environment (pulling numbers from the internet) and compare to the loan rates.
+
+```{r echo=FALSE}
+ggplot() +
+  geom_point(aes(x = LoanOriginationQuarter, y = BorrowerRate, color=ProsperRating..Alpha.), 
+             data = subset(loanNewTerm36, loanNewTerm36$LoanOriginationQuarter %in% timeSpan), 
+             position = position_jitter(width = 0.5), alpha = .1) +
+  stat_summary(aes(x = LoanOriginationQuarter, y = BorrowerRate, group = ProsperRating..Alpha., 
+                   color = ProsperRating..Alpha.),
+               data = subset(loanNewTerm36, loanNewTerm36$LoanOriginationQuarter %in% timeSpan), 
+               fun.y = mean, geom = "line", linetype = 2, size = 1.2)
+
+# These values found from online sources
+GDP <- as.numeric(c('14402.5', '14541.9', '14604.8', '14745.9', '14845.5', '14939.0', '14881.3'))
+dfGDP <- data.frame(GDP, timeSpan)
+
+ggplot(aes(x = timeSpan, y = GDP, color = "GDP"), data = dfGDP) +
+  geom_line(aes(group = 1)) +
+  scale_colour_manual(name="Line Color", values=c(GDP="red"))
+
+```
+
+Here we can see that trend of the rate ranges for each Prosper Rating group generally increase initially from Q3 to Q4 2009.  They then remain constant or have slight changes until Q1 2011 where they all seem to drop.  This does match up somewhat with our GDP trend which has a near-constant increase until a drop in Q1 2011.  So we can see some correlation between our indicator of economic strength and the loan rates.
+
+***
+
+I did notice that one blogger indicated that self-employed people incurred higher rates on Prosper.  Out of curiosity I'd like to review this against the data.  I'll control for income range, as reporting of income range could play a large role in this
+
+```{r echo=FALSE}
+loanNewSample <- sample_n(loanNew, 5000)
+
+qplot(x = BorrowerRate, data = subset(loanNewTerm36, loanNewTerm36$EmploymentStatus %in% c('Full-time', 'Retired', 'Self-employed')), color = EmploymentStatus, geom = 'density') +
+  facet_wrap(~IncomeRange)
+```
+
+According to this review, it does appear that borrowers reporting "self-employed" do generally have higher rates than those reporting "full-time" employment status.
+
+***
+#### Prosper Rating and Score Models
+
+I'd finally like to create a model for Prosper Rating and Prosper Score based on our review.  These will be simple linear models, though as we've seen the models or alogrithms to create these grades are more complex than we can reliably re-create here.
+
+First the Prosper Score.
+
+```{r echo=FALSE, Build_Linear_Model_ProsperScore}
+m1 <- lm(ProsperScore ~ InquiriesLast6Months, data = loanNew, na.action = na.exclude)
+m2 <- update(m1, ~ . + BankcardUtilization)
+m3 <- update(m2, ~ . + TradesOpenedLast6Months)
+m4 <- update(m3, ~ . + DelinquenciesLast7Years)
+m5 <- update(m4, ~ . + DebtToIncomeRatio)
+m6 <- update(m5, ~ . + StatedMonthlyIncome)
+m7 <- update(m6, ~ . + OnTimeProsperPayments)
+mtable(m1, m2, m3, m4, m5, m6, m7)
+
+
+modelEstimate <- predict(m7, newdata = loanNew, interval = 'prediction', level = .90)
+loanPredict <- cbind(loanNew, fitted = fitted(m7))
+loanPredict <- na.omit(loanPredict[,c('ProsperScore', 'fitted')])
+
+ggplot(aes(x = ProsperScore, y = fitted), data = loanPredict) +
+  geom_point(alpha = .1) + 
+  ylim(1,11) +
+  xlim(1,11) +
+  stat_smooth(method = "lm", col = "red") +
+  geom_abline(slope = 1, intercept = 0)
+
+```
+
+It looks like we have the general trend correct, though again this model leaves a lot to be desired.
+
+Now for the Prosper Rating.
+
+```{r echo=FALSE, Build_Linear_Model_ProsperRating}
+n1 <- lm(ProsperRating..numeric. ~ ProsperScore, data = loanNew, na.action = na.exclude)
+n2 <- update(n1, ~ . + CreditScoreRangeLower)
+mtable(n1, n2)
+
+loanPredict <- cbind(loanNew, fitted = fitted(n2))
+loanPredict <- na.omit(loanPredict[,c('ProsperRating..numeric.', 'fitted')])
+
+ggplot(aes(x = ProsperRating..numeric., y = fitted), data = loanPredict) +
+  geom_point(alpha = .1) + 
+  ylim(1,7) +
+  xlim(1,7) +
+  stat_smooth(method = "lm", col = "red") +
+  geom_abline(slope = 1, intercept = 0)
+```
+
+This looks a little better than the model for the Prosper Score.  However, again we have the general trend correct but this would not be a reliable model.
+
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+
+The loan interest rate is clearly most correlated to ther Prosper Rating (as indicated by Prosper).  However, while the Prosper Rating will indicate the general range of interest rates, there are other factors that dictate where in that range the rate will actually be set.  Loan term seems to be related to this with longer terms having a higher rate.  Also, the general economic environment seems to have an effect, where the rates seemed to generally trend with the GDP.  It'd be interesting to see how Prosper gauges and incorporates economic environment.
+
+### Were there any interesting or surprising interactions between features?
+
+Interest rates seemed to be higher generally for "self-employed" borrowers across all income ranges.  This was suggested by a blogger and it beared out in the data.  However, it would take more work to see if this is a direct or indirect correlation.
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the strengths and limitations of your model.
+
+I created two models: one for Prosper Rating and one for Prosper Score.  Given the basic information on what makes up these grades I was able to create models that follow the general trend.  However, how Prosper arrives at these grades is rather complex and likely based off certain metrics that may not be available.  
+
+So the models might indicate if the grade will be on the lower or higher end, but they're not perfect models.  A practical weakness of the models is that Prosper will quote a rate directly from the site, so these models aren't very useful in any case.
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+p <- ggplot(aes(x = LoanOriginationQuarter, fill = ProsperRating..Alpha.), data = loanNew) +
+  geom_bar() +
+  ylab("Number of Loans") +
+  xlab("Calendar Quarter") +
+  guides(fill=guide_legend(title="Prosper\nRating")) +
+  ggtitle('Loans Originated by Quarter and Prosper Rating')
+
+p1 <- p + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position=c(.1, .6))
+
+
+p2 <- p + facet_grid(ProsperRating..Alpha. ~ .) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position="none")
+
+p1
+p2
+```
+
+### Description One
+The loan activity for Prosper since the re-start in 2009 has generally increased steadily.  A local peak occurred in Q3 2012 which was followed by a half year of stagnation.  Then, in Q2 2013 the number of loans orignated increased dramatically, peaking in Q4 2013 at over two times the number of loans originated in the previous peak of Q3 2012.
+
+Most of the previous peak in Q3 2012 was attributed to riskier loans, from Prosper Rating "C" to "HR".  The more recent peak was due to less-risky loans, ranging mostly from Prosper Rating "A" to "C".
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+set.seed(15)
+loanNewSample <- sample_n(loanNew, 2500)
+loanNewSample$LoanOriginationYear <- format(loanNewSample$LoanOriginationDate, '%Y')
+
+ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), data = loanNewSample) +
+  geom_point(aes(color = LoanOriginationYear), alpha = .5, position = position_jitter()) +
+  ylab("Interest Rate") +
+  xlab("Prosper Rating") +
+  guides(color=guide_legend(title="Origination\nYear")) +
+  ggtitle('Interest Rate by Prosper Rating, Year')
+
+ggplot(aes(x = ProsperRating..Alpha., y = BorrowerRate), 
+       data = subset(loanNewSample, loanNewSample$ProsperRating..Alpha. =="C")) +
+  geom_point(aes(color = LoanOriginationYear, shape = TermIndex),
+             alpha = .75, position = position_jitter(), size = 3) +
+  ylab("Interest Rate") +
+  xlab("Prosper Rating") +
+  guides(color = guide_legend(title="Origination\nYear"),
+         shape = guide_legend(title="Loan Term\n(Years)")) +
+  ggtitle('Interest Rate Detail for "C" Prosper Rating (by Year, Term)')
+```
+
+### Description Two
+The interest rate for a given loan is largely determined by the Prosper Rating for that loan.  However, there is some variance within a Prosper Rating based on various factors.  Economic conditions and loan market at the time of loan origination will affect the rate.  Additionally, the term of the loan can affect the rate: the longer the term the higher the rate.
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+loanNewTerm36Complete <- subset(loanNewTerm36, 
+                                loanNewTerm36$LoanStatus %in% c('Completed', 'Defaulted') &
+                                  loanNewTerm36$LoanOriginationDate < as.Date('2011-03-01'))
+
+loanNewTerm36Complete$LenderAnnualReturn[is.na(loanNewTerm36Complete$LenderAnnualReturn)] <- 0
+
+qplot(x = LenderAnnualReturn, data = loanNewTerm36Complete, color = ProsperRating..Alpha., 
+      geom = 'density') +
+  xlim(0,.5) +
+  ylab("Density") +
+  xlab("Lender Annual Returns") +
+  guides(color=guide_legend(title="Prosper\nRating")) +
+  ggtitle('Density of Lender Returns on Investment by Prosper Rating (0.0 to 0.50).\n
+          Sample of Loans with term of 36 months originating from Apr. 2009 through Feb. 2011')
+
+ggplot(aes(x = ProsperRating..Alpha., fill = statusGroup), data = loanNewTerm36Complete) +
+  geom_bar(stat='count', position = "fill") +
+  ylab("Proportion of Loan Final Status") +
+  xlab("Prosper Rating") +
+  guides(fill = guide_legend(title="Loan\nStatus")) +
+  ggtitle('Proportion of Loans Successfully Paid Off vs. Defaulted, by Prosper Rating.\n
+          Sample of Loans with term of 36 months originating from Apr. 2009 through Feb. 2011')
+```
+
+### Description Three
+
+Investing in Prosper Loans is like any investment: one must weigh the potential returns against the risk.  Prosper Rating is used to assess risk and to assign interest rate (and thus investor potential return).  The average return on loans increases as the Prosper Rating goes down (from AA to HR).  However, the proportion of loans defaulting also increases.
+
+------
+
+# Reflection
+
+The Prosper data set contains data on over one hundred thousand loans since 2005.  There is a clear divide in the data recorded before the class-action lawsuit (pre-2009 data) and after (starting around April 2009).  Additionally, the data only extends to 2014.  As loans are long-term agreements there isn't any data for analysis on completed five-year loans.
+
+I started by studying Prosper's loan structure and the individual variables in the data set.  I confirmed some basic information in the data set.  These include the break in activity in 2008-09 and geographic coverage of Prosper borrowers.
+
+In reviewing the Prosper Rating and Prosper Score, I was able to confirm certain data points that factor into how these grades are created.  Additionally, the analysis provided insight on how loan rates are established.  Upon reflection, the general concepts that go into how these data points are created are well-known and can generally be confirmed.  However, creating reliable models to accurately recreate these is quite complex.
+
+With additional time and knowledge in investing, there could be more interesting questions to look into the data:
+
+1. Prosper Rating gives a general indication of loan risk.  However, lenders are also suppied with the raw data to review and select loans to invest in.  With more data on successfully completed loans (and perhaps the Prosper Rating algorithm) a review of indicators into loan defaults would be interesting.  Creating a better model to calculate risk would lead to higher returns in investing.
+2. In addition to the above, more domain knowledge in investing and how to value loans could build upon the review into loan actual yield.  We would likely need to add additional data such as inflation, etc...
+3. Peer-to-peer lending trends could be reviewed by including economy data.
+

@@ -1,0 +1,13 @@
+Resources:
+
+	Prosper and Investing:
+		Prosper:		https://www.prosper.com
+		Wikipedia:		https://en.wikipedia.org/wiki/Prosper_Marketplace
+		Investopedia:	http://www.investopedia.com/
+		A Secure Life:	http://www.asecurelife.com/
+	
+	R:
+		StackOverflow:	http://stackoverflow.com/
+		Quick R:		http://www.rstudio.com/
+		ggplot2:		http://docs.ggplot2.org/
+		R Markdown:		http://rmarkdown.rstudio.com/
